@@ -76,6 +76,13 @@ export default class AgentCmd extends Command {
             helpLabel: '--vault',
             multiple: false,
         }),
+
+        mode: Flags.string({
+            char: 'm',
+            description: 'Set the agent execution mode\n\n ',
+            helpValue: '<mode>',
+            default: 'default',
+        }),
     };
 
     private _logDisabled = true;
