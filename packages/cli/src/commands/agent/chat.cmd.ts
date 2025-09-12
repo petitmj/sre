@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import readline from 'readline';
 import logUpdate from 'log-update';
 import { SRE } from '@smythos/sre';
+import { EmitUnit, PluginBase, TokenLoom } from 'tokenloom';
 
 export default async function runChat(args: any, flags: any) {
     const sreConfigs: any = {};
