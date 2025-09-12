@@ -46,9 +46,22 @@ export default async function runChat(args: any, flags: any) {
         // Set up task event listeners
         agent.on('TasksAdded', (tasksList: any, tasks: any) => {
             currentTasks = tasks || {};
+            updateStickyTasksPanel();
+        });
+        agent.on('SubTasksAdded', (taskId: string, subTasksList: any, tasks: any) => {
+            currentTasks = tasks || {};
+            updateStickyTasksPanel();
         });
         agent.on('TasksUpdated', (taskId: string, status: string, tasks: any) => {
             currentTasks = tasks || {};
+            updateStickyTasksPanel();
+        });
+        agent.on('TasksCompleted', (tasks: any) => {
+            currentTasks = tasks || {};
+            updateStickyTasksPanel();
+        });
+        agent.on('StatusUpdated', (status: string) => {
+            console.log(chalk.gray('>>> ' + status));
         });
     } else {
         console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
@@ -65,19 +78,152 @@ export default async function runChat(args: any, flags: any) {
     });
 
     // Set up readline event handlers
-    rl.on('line', (input) => handleUserInput(input, rl, chat));
+    rl.on('line', (input) => handleUserInput(input, rl, chat, isPlanner, currentTasks));
 
     rl.on('close', () => {
         console.log(chalk.gray('Chat session ended.'));
         process.exit(0);
     });
 
+    // Redraw panel on terminal resize (planner mode only)
+    if (isPlanner) {
+        process.stdout.on('resize', () => {
+            updateStickyTasksPanel();
+        });
+    }
+
     // Start the interactive chat
     rl.prompt();
 }
 
+// Global variable to store current tasks across function calls
+let globalCurrentTasks: any = {};
+
+function updateStickyTasksPanel() {
+    if (!globalCurrentTasks || Object.keys(globalCurrentTasks).length === 0) return;
+
+    const terminalWidth = process.stdout.columns || 80;
+    const panelWidth = 40;
+    const panelHeight = 30;
+    const panelStartCol = terminalWidth - panelWidth;
+
+    // Save cursor position
+    process.stdout.write('\u001b[s');
+
+    // Clear the panel area first
+    for (let row = 1; row <= panelHeight; row++) {
+        process.stdout.write(`\u001b[${row};${panelStartCol}H`);
+        process.stdout.write(' '.repeat(panelWidth));
+    }
+
+    let currentRow = 1;
+
+    // Draw panel border and title
+    process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+    process.stdout.write(chalk.cyan('┌─ 📋 Tasks ') + chalk.cyan('─'.repeat(panelWidth - 13)) + chalk.cyan('┐'));
+    currentRow++;
+
+    // Display tasks
+    Object.entries(globalCurrentTasks).forEach(([taskId, task]: [string, any]) => {
+        if (currentRow >= panelHeight - 3) return;
+
+        const summary = task.summary || task.description || 'No description';
+        const status = task.status || 'planned';
+
+        let statusColor: (text: string) => string = chalk.white;
+        let icon = '';
+
+        switch (status.toLowerCase()) {
+            case 'completed':
+            case 'done':
+                statusColor = chalk.green;
+                icon = '✅';
+                break;
+            case 'ongoing':
+            case 'in progress':
+                statusColor = chalk.yellow;
+                icon = '⏳';
+                break;
+            case 'failed':
+            case 'error':
+                statusColor = chalk.red;
+                icon = '❌';
+                break;
+            case 'planned':
+            default:
+                statusColor = chalk.blue;
+                icon = '📝';
+                break;
+        }
+
+        // Status line
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+        process.stdout.write(chalk.cyan('│') + ' ');
+        process.stdout.write(`${icon} ${statusColor(status.toUpperCase())}`);
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+        process.stdout.write(chalk.cyan('│'));
+        currentRow++;
+
+        // Summary lines with word wrapping
+        const maxSummaryLength = panelWidth - 5;
+        const wrappedSummary = wrapText(summary, maxSummaryLength);
+
+        for (const line of wrappedSummary) {
+            if (currentRow >= panelHeight - 3) break;
+
+            process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+            process.stdout.write(chalk.cyan('│') + '  ');
+            process.stdout.write(chalk.white(line));
+            process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+            process.stdout.write(chalk.cyan('│'));
+            currentRow++;
+        }
+    });
+
+    // Fill remaining rows
+    while (currentRow < panelHeight - 2) {
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+        process.stdout.write(chalk.cyan('│'));
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+        process.stdout.write(chalk.cyan('│'));
+        currentRow++;
+    }
+
+    // Bottom border
+    process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+    process.stdout.write(chalk.cyan('└') + chalk.cyan('─'.repeat(panelWidth - 2)) + chalk.cyan('┘'));
+
+    // Restore cursor position
+    process.stdout.write('\u001b[u');
+}
+
+// Helper function to wrap text to specified width
+function wrapText(text: string, maxWidth: number): string[] {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+        if ((currentLine + word).length <= maxWidth) {
+            currentLine += (currentLine ? ' ' : '') + word;
+        } else {
+            if (currentLine) {
+                lines.push(currentLine);
+                currentLine = word;
+            } else {
+                lines.push(word.substring(0, maxWidth - 3) + '...');
+                currentLine = '';
+            }
+        }
+    }
+    if (currentLine) {
+        lines.push(currentLine);
+    }
+    return lines;
+}
+
 // Function to handle user input and chat response
-async function handleUserInput(input: string, rl: readline.Interface, chat: Chat) {
+async function handleUserInput(input: string, rl: readline.Interface, chat: Chat, isPlanner: boolean = false, currentTasks: any = {}) {
     if (input.toLowerCase().trim() === 'exit' || input.toLowerCase().trim() === 'quit') {
         console.log(chalk.green('👋 Goodbye!'));
         rl.close();
@@ -90,7 +236,15 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
     }
 
     try {
-        logUpdate(chalk.gray('Thinking...'));
+        // Update global tasks reference
+        globalCurrentTasks = currentTasks;
+        
+        if (isPlanner) {
+            console.log(chalk.gray('Thinking...'));
+            updateStickyTasksPanel();
+        } else {
+            logUpdate(chalk.gray('Thinking...'));
+        }
 
         const assistantName = chat.agentData.name || 'AI';
         // Send message to the agent and get response
