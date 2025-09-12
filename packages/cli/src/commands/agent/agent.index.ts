@@ -79,8 +79,10 @@ export default class AgentCmd extends Command {
 
         mode: Flags.string({
             char: 'm',
-            description: 'Set the agent execution mode\n\n ',
+            description: 'Set the agent execution mode\nExample: sre ./myagent.smyth --chat --mode planner\n\n ',
             helpValue: '<mode>',
+            helpLabel: '--mode',
+            options: ['default', 'planner'],
             default: 'default',
         }),
     };
@@ -208,6 +210,7 @@ export default class AgentCmd extends Command {
             promptModel,
             vault: vaultPath || null,
             models: modelsPath || null,
+            mode: flags.mode || 'default',
         };
         this.log(chalk.gray(`   Flags: ${JSON.stringify(allFlags, null, 2).replace(/\n/g, '\n          ')}`));
 
