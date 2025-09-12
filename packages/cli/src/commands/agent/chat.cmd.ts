@@ -1,4 +1,4 @@
-import { Agent, Chat, TLLMEvent } from '@smythos/sdk';
+import { Agent, Chat, TLLMEvent, TAgentMode } from '@smythos/sdk';
 import chalk from 'chalk';
 import readline from 'readline';
 import logUpdate from 'log-update';
@@ -27,8 +27,9 @@ export default async function runChat(args: any, flags: any) {
     await SRE.ready();
     const agentPath = args.path;
     const model = flags.chat === 'DEFAULT_MODEL' ? 'gpt-4o' : flags.chat;
+    const mode = flags.mode === 'planner' ? TAgentMode.PLANNER : TAgentMode.DEFAULT;
 
-    const agent = Agent.import(agentPath, { model });
+    const agent = Agent.import(agentPath, { model, mode });
     console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
     console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     const chat = agent.chat();
