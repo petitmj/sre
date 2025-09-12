@@ -32,12 +32,24 @@ export default async function runChat(args: any, flags: any) {
 
     const agent = Agent.import(agentPath, { model, mode });
     
-    // TODO: Implement different UI for planner mode
     const isPlanner = mode === TAgentMode.PLANNER;
+    let currentTasks: any = {};
     
     if (isPlanner) {
+        console.clear();
         console.log(chalk.green('🚀 Smyth Agent is ready in Planner mode!'));
+        console.log(chalk.yellow('The agent will create and manage tasks automatically.'));
+        console.log(chalk.gray('Tasks will appear in the panel on the right →'));
         console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
+        console.log(''); // Empty line
+        
+        // Set up task event listeners
+        agent.on('TasksAdded', (tasksList: any, tasks: any) => {
+            currentTasks = tasks || {};
+        });
+        agent.on('TasksUpdated', (taskId: string, status: string, tasks: any) => {
+            currentTasks = tasks || {};
+        });
     } else {
         console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
         console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
