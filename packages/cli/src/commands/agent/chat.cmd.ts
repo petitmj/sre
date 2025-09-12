@@ -30,8 +30,18 @@ export default async function runChat(args: any, flags: any) {
     const mode = flags.mode === 'planner' ? TAgentMode.PLANNER : TAgentMode.DEFAULT;
 
     const agent = Agent.import(agentPath, { model, mode });
-    console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
-    console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    
+    // TODO: Implement different UI for planner mode
+    const isPlanner = mode === TAgentMode.PLANNER;
+    
+    if (isPlanner) {
+        console.log(chalk.green('🚀 Smyth Agent is ready in Planner mode!'));
+        console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
+    } else {
+        console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
+        console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    }
+    
     const chat = agent.chat();
 
     // Create readline interface for user input
