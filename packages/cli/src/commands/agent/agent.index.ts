@@ -19,6 +19,7 @@ export default class AgentCmd extends Command {
 
     static override examples = [
         '<%= config.bin %> <%= command.id %> ./myagent.smyth --chat',
+        '<%= config.bin %> <%= command.id %> ./myagent.smyth --chat --mode planner',
         '<%= config.bin %> <%= command.id %> ./myagent.smyth --prompt "What is the weather in Tokyo?"',
         '<%= config.bin %> <%= command.id %> ./myagent.smyth --skill ask question="who are you"',
         '<%= config.bin %> <%= command.id %> ./myagent.smyth --mcp sse',
