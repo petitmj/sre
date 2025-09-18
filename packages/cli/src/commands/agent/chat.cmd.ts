@@ -239,119 +239,277 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         // Update global tasks reference
         globalCurrentTasks = currentTasks;
         
+        const assistantName = chat.agentData.name || 'AI';
+        
         if (isPlanner) {
             console.log(chalk.gray('Thinking...'));
             updateStickyTasksPanel();
+            
+            // Send message to the agent and get response
+            const streamChat = await chat.prompt(input).stream();
+            await handlePlannerStreaming(streamChat, rl);
         } else {
             logUpdate(chalk.gray('Thinking...'));
+            
+            // Send message to the agent and get response
+            const streamChat = await chat.prompt(input).stream();
+            await handleNormalStreaming(streamChat, rl, assistantName);
         }
-
-        const assistantName = chat.agentData.name || 'AI';
-        // Send message to the agent and get response
-        const streamChat = await chat.prompt(input).stream();
-
-        let response = '';
-        const gradientLength = 10;
-        const gradient = [
-            chalk.rgb(200, 255, 200),
-            chalk.rgb(170, 255, 170),
-            chalk.rgb(140, 240, 140),
-            chalk.rgb(110, 225, 110),
-            chalk.rgb(85, 221, 85),
-            chalk.rgb(60, 200, 60),
-            chalk.rgb(0, 187, 0),
-            chalk.rgb(0, 153, 0),
-            chalk.bold.rgb(0, 130, 0),
-            chalk.bold.rgb(0, 119, 0),
-        ];
-
-        let typing = Promise.resolve();
-        let streamingStarted = false;
-        let toolCallMessages: string[] = [];
-
-        const renderResponse = () => {
-            const prefix = chalk.green(`\n🤖 ${assistantName}\n`);
-            const nonGradientPart = response.slice(0, -gradientLength);
-            const gradientPart = response.slice(-gradientLength);
-
-            let coloredGradientPart = '';
-            for (let j = 0; j < gradientPart.length; j++) {
-                const colorIndex = gradient.length - gradientPart.length + j;
-                const color = gradient[colorIndex] || chalk.white;
-                coloredGradientPart += color(gradientPart[j]);
-            }
-
-            logUpdate(`${prefix}${chalk.white(nonGradientPart)}${coloredGradientPart}`);
-        };
-
-        streamChat.on(TLLMEvent.Content, (content) => {
-            if (content.length === 0) return;
-
-            if (!streamingStarted) {
-                streamingStarted = true;
-                toolCallMessages = []; // Clear tool messages
-                response = ''; // Clear any previous state.
-            }
-
-            typing = typing.then(
-                () =>
-                    new Promise((resolve) => {
-                        let i = 0;
-                        const intervalId = setInterval(() => {
-                            if (i >= content.length) {
-                                clearInterval(intervalId);
-                                resolve();
-                                return;
-                            }
-
-                            response += content[i];
-                            renderResponse();
-                            i++;
-                        }, 5); // 10ms interval for faster typing
-                    })
-            );
-        });
-
-        streamChat.on(TLLMEvent.End, async () => {
-            await typing;
-            if (streamingStarted) {
-                // Final render with all white text
-                logUpdate(chalk.green(`\n🤖 ${assistantName}\n`) + chalk.white(response));
-            }
-            logUpdate.done();
-            rl.prompt();
-        });
-
-        streamChat.on(TLLMEvent.Error, async (error) => {
-            await typing;
+    } catch (error) {
+        if (isPlanner) {
+            console.error(chalk.red('❌ Error:', error));
+        } else {
             logUpdate.clear();
             console.error(chalk.red('❌ Error:', error));
-            rl.prompt();
-        });
+        }
+        rl.prompt();
+    }
+}
 
-        streamChat.on(TLLMEvent.ToolCall, async (toolCall) => {
-            await typing;
+async function handleNormalStreaming(streamChat: any, rl: readline.Interface, assistantName: string) {
+    let response = '';
+    const gradientLength = 10;
+    const gradient = [
+        chalk.rgb(200, 255, 200),
+        chalk.rgb(170, 255, 170),
+        chalk.rgb(140, 240, 140),
+        chalk.rgb(110, 225, 110),
+        chalk.rgb(85, 221, 85),
+        chalk.rgb(60, 200, 60),
+        chalk.rgb(0, 187, 0),
+        chalk.rgb(0, 153, 0),
+        chalk.bold.rgb(0, 130, 0),
+        chalk.bold.rgb(0, 119, 0),
+    ];
 
-            const toolMessage = `${chalk.yellowBright('[Calling Tool]')} ${toolCall?.tool?.name} ${chalk.gray(
-                typeof toolCall?.tool?.arguments === 'object' ? JSON.stringify(toolCall?.tool?.arguments) : toolCall?.tool?.arguments
-            )}`;
-            toolCallMessages.push(toolMessage);
-            logUpdate(toolCallMessages.join('\n'));
-        });
+    let typing = Promise.resolve();
+    let streamingStarted = false;
+    let toolCallMessages: string[] = [];
 
-        streamChat.on(TLLMEvent.ToolResult, async () => {
-            await typing;
+    const renderResponse = () => {
+        const prefix = chalk.green(`\n🤖 ${assistantName}\n`);
+        const nonGradientPart = response.slice(0, -gradientLength);
+        const gradientPart = response.slice(-gradientLength);
 
-            const thinkingMessage = chalk.gray('Thinking...');
-            // If we're not already showing "Thinking...", replace previous messages with it.
-            if (toolCallMessages.length !== 1 || toolCallMessages[0] !== thinkingMessage) {
-                toolCallMessages = [thinkingMessage];
-                logUpdate(toolCallMessages.join('\n'));
-            }
-        });
-    } catch (error) {
+        let coloredGradientPart = '';
+        for (let j = 0; j < gradientPart.length; j++) {
+            const colorIndex = gradient.length - gradientPart.length + j;
+            const color = gradient[colorIndex] || chalk.white;
+            coloredGradientPart += color(gradientPart[j]);
+        }
+
+        logUpdate(`${prefix}${chalk.white(nonGradientPart)}${coloredGradientPart}`);
+    };
+
+    streamChat.on(TLLMEvent.Content, (content) => {
+        if (content.length === 0) return;
+
+        if (!streamingStarted) {
+            streamingStarted = true;
+            toolCallMessages = []; // Clear tool messages
+            response = ''; // Clear any previous state.
+        }
+
+        typing = typing.then(
+            () =>
+                new Promise((resolve) => {
+                    let i = 0;
+                    const intervalId = setInterval(() => {
+                        if (i >= content.length) {
+                            clearInterval(intervalId);
+                            resolve();
+                            return;
+                        }
+
+                        response += content[i];
+                        renderResponse();
+                        i++;
+                    }, 5); // 5ms interval for typing
+                })
+        );
+    });
+
+    streamChat.on(TLLMEvent.End, async () => {
+        await typing;
+        if (streamingStarted) {
+            // Final render with all white text
+            logUpdate(chalk.green(`\n🤖 ${assistantName}\n`) + chalk.white(response));
+        }
+        logUpdate.done();
+        rl.prompt();
+    });
+
+    streamChat.on(TLLMEvent.Error, async (error) => {
+        await typing;
         logUpdate.clear();
         console.error(chalk.red('❌ Error:', error));
         rl.prompt();
-    }
+    });
+
+    streamChat.on(TLLMEvent.ToolCall, async (toolCall) => {
+        await typing;
+
+        const toolMessage = `${chalk.yellowBright('[Calling Tool]')} ${toolCall?.tool?.name} ${chalk.gray(
+            typeof toolCall?.tool?.arguments === 'object' ? JSON.stringify(toolCall?.tool?.arguments) : toolCall?.tool?.arguments
+        )}`;
+        toolCallMessages.push(toolMessage);
+        logUpdate(toolCallMessages.join('\n'));
+    });
+
+    streamChat.on(TLLMEvent.ToolResult, async () => {
+        await typing;
+
+        const thinkingMessage = chalk.gray('Thinking...');
+        // If we're not already showing "Thinking...", replace previous messages with it.
+        if (toolCallMessages.length !== 1 || toolCallMessages[0] !== thinkingMessage) {
+            toolCallMessages = [thinkingMessage];
+            logUpdate(toolCallMessages.join('\n'));
+        }
+    });
+}
+
+async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
+    // Clear the current line and move to a new line for the response
+    process.stdout.write('\r');
+
+    // TokenLoom parser to handle streaming content
+    const parser = new TokenLoom({
+        emitUnit: EmitUnit.Word,
+        emitDelay: 5,
+        tags: ['thinking', 'planning', 'code'],
+    });
+
+    // Add line wrapping plugin (wrap based on terminal width)
+    const terminalWidth = process.stdout.columns || 80;
+    const panelWidth = 40; // Same as in updateStickyTasksPanel
+    const availableWidth = terminalWidth - panelWidth - 10;
+    const wrapWidth = Math.max(50, availableWidth);
+    parser.use(new LineWrapperPlugin(wrapWidth));
+
+    let assistantPrefixed = false;
+    const printAssistantPrefixOnce = () => {
+        if (!assistantPrefixed) {
+            process.stdout.write(chalk.green('🤖 Assistant: '));
+            assistantPrefixed = true;
+        }
+    };
+
+    // Timing trackers
+    const tagStartTime: Record<string, number> = {};
+    let fenceStartTime: number | null = null;
+
+    const special_tags = ['thinking', 'code', 'planning'];
+    const content_color = {
+        thinking: chalk.gray,
+        planning: chalk.green,
+    };
+
+    // Tag events
+    parser.on('tag-open', (event: any) => {
+        printAssistantPrefixOnce();
+        const name = (event.name || '').toLowerCase();
+        process.stdout.write(chalk.gray(`<${name}>`));
+        tagStartTime[name] = Date.now();
+    });
+
+    parser.on('tag-close', (event: any) => {
+        printAssistantPrefixOnce();
+        const name = (event.name || '').toLowerCase();
+        process.stdout.write(chalk.gray(`</${name}>`));
+        const duration = tagStartTime[name] ? Date.now() - tagStartTime[name] : 0;
+        delete tagStartTime[name];
+        console.log(chalk.blue(`\n[${name}] Took ${duration}ms`));
+    });
+
+    // Code fence events
+    parser.on('code-fence-start', (event: any) => {
+        printAssistantPrefixOnce();
+        const info = event.info ? String(event.info) : event.lang ? String(event.lang) : '';
+        process.stdout.write(chalk.gray(`\n\`\`\`${info}\n`));
+        fenceStartTime = Date.now();
+    });
+
+    parser.on('code-fence-chunk', (event: any) => {
+        printAssistantPrefixOnce();
+        process.stdout.write(chalk.cyan(event.text || ''));
+    });
+
+    parser.on('code-fence-end', () => {
+        printAssistantPrefixOnce();
+        process.stdout.write(chalk.gray(`\n\`\`\`\n`));
+        const duration = fenceStartTime ? Date.now() - fenceStartTime : 0;
+        fenceStartTime = null;
+        console.log(chalk.blue(`\n[code Block] Took: ${duration}ms`));
+    });
+
+    // Plain text tokens
+    parser.on('text', (event: any) => {
+        printAssistantPrefixOnce();
+        const inTagName = event?.in?.inTag?.name ? String(event.in.inTag.name).toLowerCase() : null;
+        if (inTagName && special_tags.includes(inTagName)) {
+            const color = (content_color as any)[inTagName] || chalk.gray;
+            process.stdout.write(color(event.text || ''));
+        } else {
+            process.stdout.write(chalk.white(event.text || ''));
+        }
+        // Update tasks panel less frequently to reduce interference
+        updateStickyTasksPanel();
+    });
+
+    streamChat.on(TLLMEvent.Data, (data) => {
+        // console.log(chalk.gray('DATA  = ' + JSON.stringify(data)));
+    });
+
+    streamChat.on(TLLMEvent.Content, (content) => {
+        updateStickyTasksPanel();
+        parser.feed({ text: content });
+    });
+
+    streamChat.on(TLLMEvent.End, () => {
+        parser.flush();
+        console.log('\n');
+        updateStickyTasksPanel();
+        //wait for the parser to flush
+        parser.once('buffer-released', () => {
+            rl.prompt();
+        });
+    });
+
+    streamChat.on(TLLMEvent.Error, (error) => {
+        console.error(chalk.red('❌ Error:', error));
+        rl.prompt();
+    });
+
+    const toolCalls = {};
+
+    streamChat.on(TLLMEvent.ToolCall, (toolCall) => {
+        if (toolCall?.tool?.name.startsWith('_sre_')) {
+            return;
+        }
+
+        //make sure to not print tool info in the middle of a stream output
+        parser.once('buffer-released', (event) => {
+            const args =
+                typeof toolCall?.tool?.arguments === 'object'
+                    ? Object.keys(toolCall?.tool?.arguments).map((key) => `${key}: ${toolCall?.tool?.arguments[key]}`)
+                    : toolCall?.tool?.arguments;
+            console.log(chalk.gray('\n[Calling Tool]'), chalk.gray(toolCall?.tool?.name), chalk.gray(args));
+            toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
+        });
+
+        updateStickyTasksPanel();
+    });
+
+    streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
+        if (toolResult?.tool?.name.startsWith('_sre_')) {
+            return;
+        }
+
+        //make sure to not print tool info in the middle of a stream output
+        parser.once('buffer-released', (event) => {
+            console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
+            delete toolCalls[toolResult?.tool?.id];
+        });
+        updateStickyTasksPanel();
+    });
 }
