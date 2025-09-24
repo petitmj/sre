@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import readline from 'readline';
 import logUpdate from 'log-update';
 import { SRE } from '@smythos/sre';
-import { EmitUnit, PluginBase, TokenLoom } from 'tokenloom';
+import { EmitUnit, PluginBase, TokenLoom, PluginAPI } from 'tokenloom';
 
 export default async function runChat(args: any, flags: any) {
     const sreConfigs: any = {};
@@ -66,8 +66,8 @@ export default async function runChat(args: any, flags: any) {
             console.log(chalk.gray('>>> ' + status));
         });
     } else {
-        console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
-        console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
+    console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     }
     
     const chat = agent.chat();
@@ -80,7 +80,7 @@ export default async function runChat(args: any, flags: any) {
     });
 
     // Set up readline event handlers
-    rl.on('line', (input) => handleUserInput(input, rl, chat, isPlanner, currentTasks));
+        rl.on('line', (input) => handleUserInput(input, rl, chat, isPlanner));
 
     rl.on('close', () => {
         console.log(chalk.gray('Chat session ended.'));
@@ -224,8 +224,8 @@ function wrapText(text: string, maxWidth: number): string[] {
     return lines;
 }
 
-// Function to handle user input and chat response
-async function handleUserInput(input: string, rl: readline.Interface, chat: Chat, isPlanner: boolean = false, currentTasks: any = {}) {
+// Function to handle user input and chat response - matches reference example exactly
+async function handleUserInput(input: string, rl: readline.Interface, chat: Chat, isPlanner: boolean = false) {
     if (input.toLowerCase().trim() === 'exit' || input.toLowerCase().trim() === 'quit') {
         console.log(chalk.green('👋 Goodbye!'));
         rl.close();
@@ -238,286 +238,271 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
     }
 
     try {
-        // No need for global tasks reference anymore
-        
-        const assistantName = chat.agentData.name || 'AI';
-        
+        console.log(chalk.gray('Thinking...'));
         if (isPlanner) {
-            console.log(chalk.gray('Thinking...'));
-            updateStickyTasksPanel();
-            
-            // Send message to the agent and get response
-            const streamChat = await chat.prompt(input).stream();
-            await handlePlannerStreaming(streamChat, rl);
-        } else {
-            logUpdate(chalk.gray('Thinking...'));
-            
-            // Send message to the agent and get response
-            const streamChat = await chat.prompt(input).stream();
-            await handleNormalStreaming(streamChat, rl, assistantName);
+            // Update task panel for planner mode
+            const displayTasksList = (tasksList: any) => {
+                currentTasks = tasksList || {};
+                updateStickyTasksPanel();
+            };
+            displayTasksList(currentTasks);
         }
+
+        // Send message to the agent and get response
+        const streamChat = await chat.prompt(input).stream();
+
+        // Clear the current line and move to a new line for the response
+        process.stdout.write('\r');
+
+        // TokenLoom parser to handle streaming content - ALWAYS use this approach
+        const parser = new TokenLoom({
+            emitUnit: EmitUnit.Word,
+            emitDelay: 5,
+            tags: ['thinking', 'planning', 'code'],
+        });
+
+        // Add line wrapping plugin (wrap based on terminal width)
+        const terminalWidth = process.stdout.columns || 80;
+        const panelWidth = 40; // Same as in updateStickyTasksPanel
+        const availableWidth = terminalWidth - panelWidth - 10;
+        const wrapWidth = Math.max(50, availableWidth);
+        parser.use(new LineWrapperPlugin(wrapWidth));
+
+        let assistantPrefixed = false;
+        const printAssistantPrefixOnce = () => {
+            if (!assistantPrefixed) {
+                process.stdout.write(chalk.green('🤖 Assistant: '));
+                assistantPrefixed = true;
+            }
+        };
+
+        // Timing trackers
+        const tagStartTime: Record<string, number> = {};
+        let fenceStartTime: number | null = null;
+
+        const special_tags = ['thinking', 'code', 'planning'];
+        const content_color = {
+            thinking: chalk.gray,
+            planning: chalk.green,
+            code: chalk.cyan,
+        };
+
+        // Tag events
+        parser.on('tag-open', (event: any) => {
+            printAssistantPrefixOnce();
+            const name = (event.name || '').toLowerCase();
+            process.stdout.write(chalk.gray(`<${name}>`));
+            tagStartTime[name] = Date.now();
+        });
+
+        parser.on('tag-close', (event: any) => {
+            printAssistantPrefixOnce();
+            const name = (event.name || '').toLowerCase();
+            process.stdout.write(chalk.gray(`</${name}>`));
+            const duration = tagStartTime[name] ? Date.now() - tagStartTime[name] : 0;
+            delete tagStartTime[name];
+            console.log(chalk.blue(`\n[${name}] Took ${duration}ms`));
+        });
+
+        // Code fence events
+        parser.on('code-fence-start', (event: any) => {
+            printAssistantPrefixOnce();
+            const info = event.info ? String(event.info) : event.lang ? String(event.lang) : '';
+            process.stdout.write(chalk.gray(`\n\`\`\`${info}\n`));
+            fenceStartTime = Date.now();
+        });
+
+        parser.on('code-fence-chunk', (event: any) => {
+            printAssistantPrefixOnce();
+            process.stdout.write(chalk.cyan(event.text || ''));
+        });
+
+        parser.on('code-fence-end', () => {
+            printAssistantPrefixOnce();
+            process.stdout.write(chalk.gray(`\n\`\`\`\n`));
+            const duration = fenceStartTime ? Date.now() - fenceStartTime : 0;
+            fenceStartTime = null;
+            console.log(chalk.blue(`\n[code Block] Took: ${duration}ms`));
+        });
+
+        // Plain text tokens
+        parser.on('text', (event: any) => {
+            printAssistantPrefixOnce();
+            const inTagName = event?.in?.inTag?.name ? String(event.in.inTag.name).toLowerCase() : null;
+            if (inTagName && special_tags.includes(inTagName)) {
+                const color = (content_color as any)[inTagName] || chalk.gray;
+                process.stdout.write(color(event.text || ''));
+            } else {
+                process.stdout.write(chalk.white(event.text || ''));
+            }
+            // Only update tasks panel in planner mode
+            if (isPlanner) {
+                const displayTasksList = (tasksList: any) => {
+                    currentTasks = tasksList || {};
+                    updateStickyTasksPanel();
+                };
+                displayTasksList(currentTasks);
+            }
+        });
+
+        streamChat.on(TLLMEvent.Data, (data) => {
+            //console.log(chalk.gray('DATA  = ' + JSON.stringify(data)));
+        });
+
+        streamChat.on(TLLMEvent.Content, (content) => {
+            if (isPlanner) {
+                const displayTasksList = (tasksList: any) => {
+                    currentTasks = tasksList || {};
+                    updateStickyTasksPanel();
+                };
+                displayTasksList(currentTasks);
+            }
+            parser.feed({ text: content });
+        });
+
+        streamChat.on(TLLMEvent.End, () => {
+            parser.flush();
+            if (isPlanner) {
+                const displayTasksList = (tasksList: any) => {
+                    currentTasks = tasksList || {};
+                    updateStickyTasksPanel();
+                };
+                displayTasksList(currentTasks);
+            }
+            //wait for the parser to flush
+            parser.once('buffer-released', () => {
+                console.log('\n\n');
+            rl.prompt();
+            });
+        });
+
+        streamChat.on(TLLMEvent.Error, (error) => {
+            console.error(chalk.red('❌ Error:', error));
+            rl.prompt();
+        });
+
+        const toolCalls = {};
+
+        streamChat.on(TLLMEvent.ToolCall, (toolCall) => {
+            if (toolCall?.tool?.name.startsWith('_sre_')) {
+                return;
+            }
+
+            //make sure to not print tool info in the middle of a stream output
+            parser.once('buffer-released', (event) => {
+                const args =
+                    typeof toolCall?.tool?.arguments === 'object'
+                        ? Object.keys(toolCall?.tool?.arguments).map((key) => `${key}: ${toolCall?.tool?.arguments[key]}`)
+                        : toolCall?.tool?.arguments;
+                console.log(chalk.gray('\n[Calling Tool]'), chalk.gray(toolCall?.tool?.name), chalk.gray(args));
+                toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
+            });
+
+            if (isPlanner) {
+                const displayTasksList = (tasksList: any) => {
+                    currentTasks = tasksList || {};
+                    updateStickyTasksPanel();
+                };
+                displayTasksList(currentTasks);
+            }
+        });
+
+        streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
+            if (toolResult?.tool?.name.startsWith('_sre_')) {
+                if (isPlanner) {
+                    console.log('\n');
+                    const displayTasksList = (tasksList: any) => {
+                        currentTasks = tasksList || {};
+                        updateStickyTasksPanel();
+                    };
+                    displayTasksList(currentTasks);
+                }
+                return;
+            }
+
+            //make sure to not print tool info in the middle of a stream output
+            parser.once('buffer-released', (event) => {
+                console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
+                delete toolCalls[toolResult?.tool?.id];
+            });
+            
+            if (isPlanner) {
+                const displayTasksList = (tasksList: any) => {
+                    currentTasks = tasksList || {};
+                    updateStickyTasksPanel();
+                };
+                displayTasksList(currentTasks);
+            }
+        });
     } catch (error) {
-        if (isPlanner) {
-            console.error(chalk.red('❌ Error:', error));
-        } else {
-            logUpdate.clear();
-            console.error(chalk.red('❌ Error:', error));
-        }
+        console.error(chalk.red('❌ Error:', error));
         rl.prompt();
     }
 }
 
-async function handleNormalStreaming(streamChat: any, rl: readline.Interface, assistantName: string) {
-    let response = '';
-    const gradientLength = 10;
-    const gradient = [
-        chalk.rgb(200, 255, 200),
-        chalk.rgb(170, 255, 170),
-        chalk.rgb(140, 240, 140),
-        chalk.rgb(110, 225, 110),
-        chalk.rgb(85, 221, 85),
-        chalk.rgb(60, 200, 60),
-        chalk.rgb(0, 187, 0),
-        chalk.rgb(0, 153, 0),
-        chalk.bold.rgb(0, 130, 0),
-        chalk.bold.rgb(0, 119, 0),
-    ];
+//Token loom line wrapping plugin
+export class LineWrapperPlugin extends PluginBase {
+    name = 'line-wrapper';
+    private charsSinceNewline = 0;
+    private maxLineLength: number;
+    private needsWrap = false;
 
-    let typing = Promise.resolve();
-    let streamingStarted = false;
-    let toolCallMessages: string[] = [];
+    constructor(maxLineLength: number = 80) {
+        super();
+        this.maxLineLength = maxLineLength;
+    }
 
-    const renderResponse = () => {
-        const prefix = chalk.green(`\n🤖 ${assistantName}\n`);
-        const nonGradientPart = response.slice(0, -gradientLength);
-        const gradientPart = response.slice(-gradientLength);
-
-        let coloredGradientPart = '';
-        for (let j = 0; j < gradientPart.length; j++) {
-            const colorIndex = gradient.length - gradientPart.length + j;
-            const color = gradient[colorIndex] || chalk.white;
-            coloredGradientPart += color(gradientPart[j]);
+    transform(event: any, api: PluginAPI): any | any[] | null {
+        // Only process text events and code fence chunks
+        if (event.type !== 'text' && event.type !== 'code-fence-chunk') {
+            return event;
         }
 
-        logUpdate(`${prefix}${chalk.white(nonGradientPart)}${coloredGradientPart}`);
-    };
+        const text = event.text;
+        let result = '';
 
-    streamChat.on(TLLMEvent.Content, (content) => {
-        if (content.length === 0) return;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
 
-        if (!streamingStarted) {
-            streamingStarted = true;
-            toolCallMessages = []; // Clear tool messages
-            response = ''; // Clear any previous state.
+            if (char === '\n') {
+                // Reset counter on newline
+                this.charsSinceNewline = 0;
+                this.needsWrap = false;
+                result += char;
+            } else if (this.needsWrap && (char === ' ' || char === '\t')) {
+                // We've hit our limit and found a space/tab, replace with newline
+                result += '\n';
+                this.charsSinceNewline = 0;
+                this.needsWrap = false;
+            } else {
+                // Regular character
+                result += char;
+                this.charsSinceNewline++;
+
+                // Check if we've exceeded the limit
+                if (this.charsSinceNewline >= this.maxLineLength) {
+                    this.needsWrap = true;
+                }
+            }
         }
 
-        typing = typing.then(
-            () =>
-                new Promise((resolve) => {
-                    let i = 0;
-                    const intervalId = setInterval(() => {
-                        if (i >= content.length) {
-                            clearInterval(intervalId);
-                            resolve();
-                            return;
-                        }
+        // Return the modified event
+        return {
+            ...event,
+            text: result,
+        };
+    }
 
-                        response += content[i];
-                        renderResponse();
-                        i++;
-                    }, 5); // 5ms interval for typing
-                })
-        );
-    });
+    onInit?(api: PluginAPI): void {
+        // Reset state when parser initializes
+        this.charsSinceNewline = 0;
+        this.needsWrap = false;
+    }
 
-    streamChat.on(TLLMEvent.End, async () => {
-        await typing;
-        if (streamingStarted) {
-            // Final render with all white text
-            logUpdate(chalk.green(`\n🤖 ${assistantName}\n`) + chalk.white(response));
-        }
-        logUpdate.done();
-        rl.prompt();
-    });
-
-    streamChat.on(TLLMEvent.Error, async (error) => {
-        await typing;
-        logUpdate.clear();
-        console.error(chalk.red('❌ Error:', error));
-        rl.prompt();
-    });
-
-    streamChat.on(TLLMEvent.ToolCall, async (toolCall) => {
-        await typing;
-
-        const toolMessage = `${chalk.yellowBright('[Calling Tool]')} ${toolCall?.tool?.name} ${chalk.gray(
-            typeof toolCall?.tool?.arguments === 'object' ? JSON.stringify(toolCall?.tool?.arguments) : toolCall?.tool?.arguments
-        )}`;
-        toolCallMessages.push(toolMessage);
-        logUpdate(toolCallMessages.join('\n'));
-    });
-
-    streamChat.on(TLLMEvent.ToolResult, async () => {
-        await typing;
-
-        const thinkingMessage = chalk.gray('Thinking...');
-        // If we're not already showing "Thinking...", replace previous messages with it.
-        if (toolCallMessages.length !== 1 || toolCallMessages[0] !== thinkingMessage) {
-            toolCallMessages = [thinkingMessage];
-            logUpdate(toolCallMessages.join('\n'));
-        }
-    });
+    onDispose?(): void {
+        // Clean up state when plugin is disposed
+        this.charsSinceNewline = 0;
+        this.needsWrap = false;
+    }
 }
 
-async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
-    // Clear the current line and move to a new line for the response
-    process.stdout.write('\r');
-
-    // Simple displayTasksList now that currentTasks is global
-    const displayTasksList = (tasksList: any) => {
-        currentTasks = tasksList || {};
-        updateStickyTasksPanel();
-    };
-
-    // TokenLoom parser to handle streaming content
-    const parser = new TokenLoom({
-        emitUnit: EmitUnit.Word,
-        emitDelay: 5,
-        tags: ['thinking', 'planning', 'code'],
-    });
-
-    // Add line wrapping plugin (wrap based on terminal width)
-    const terminalWidth = process.stdout.columns || 80;
-    const panelWidth = 40; // Same as in updateStickyTasksPanel
-    const availableWidth = terminalWidth - panelWidth - 10;
-    const wrapWidth = Math.max(50, availableWidth);
-    parser.use(new LineWrapperPlugin(wrapWidth));
-
-    let assistantPrefixed = false;
-    const printAssistantPrefixOnce = () => {
-        if (!assistantPrefixed) {
-            process.stdout.write(chalk.green('🤖 Assistant: '));
-            assistantPrefixed = true;
-        }
-    };
-
-    // Timing trackers
-    const tagStartTime: Record<string, number> = {};
-    let fenceStartTime: number | null = null;
-
-    const special_tags = ['thinking', 'code', 'planning'];
-    const content_color = {
-        thinking: chalk.gray,
-        planning: chalk.green,
-        code: chalk.cyan,
-    };
-
-    // Tag events
-    parser.on('tag-open', (event: any) => {
-        printAssistantPrefixOnce();
-        const name = (event.name || '').toLowerCase();
-        process.stdout.write(chalk.gray(`<${name}>`));
-        tagStartTime[name] = Date.now();
-    });
-
-    parser.on('tag-close', (event: any) => {
-        printAssistantPrefixOnce();
-        const name = (event.name || '').toLowerCase();
-        process.stdout.write(chalk.gray(`</${name}>`));
-        const duration = tagStartTime[name] ? Date.now() - tagStartTime[name] : 0;
-        delete tagStartTime[name];
-        console.log(chalk.blue(`\n[${name}] Took ${duration}ms`));
-    });
-
-    // Code fence events
-    parser.on('code-fence-start', (event: any) => {
-        printAssistantPrefixOnce();
-        const info = event.info ? String(event.info) : event.lang ? String(event.lang) : '';
-        process.stdout.write(chalk.gray(`\n\`\`\`${info}\n`));
-        fenceStartTime = Date.now();
-    });
-
-    parser.on('code-fence-chunk', (event: any) => {
-        printAssistantPrefixOnce();
-        process.stdout.write(chalk.cyan(event.text || ''));
-    });
-
-    parser.on('code-fence-end', () => {
-        printAssistantPrefixOnce();
-        process.stdout.write(chalk.gray(`\n\`\`\`\n`));
-        const duration = fenceStartTime ? Date.now() - fenceStartTime : 0;
-        fenceStartTime = null;
-        console.log(chalk.blue(`\n[code Block] Took: ${duration}ms`));
-    });
-
-    // Plain text tokens
-    parser.on('text', (event: any) => {
-        printAssistantPrefixOnce();
-        const inTagName = event?.in?.inTag?.name ? String(event.in.inTag.name).toLowerCase() : null;
-        if (inTagName && special_tags.includes(inTagName)) {
-            const color = (content_color as any)[inTagName] || chalk.gray;
-            process.stdout.write(color(event.text || ''));
-        } else {
-            process.stdout.write(chalk.white(event.text || ''));
-        }
-        // Update tasks panel on every text token
-        displayTasksList(currentTasks);
-    });
-
-    streamChat.on(TLLMEvent.Data, (data) => {
-        // console.log(chalk.gray('DATA  = ' + JSON.stringify(data)));
-    });
-
-    streamChat.on(TLLMEvent.Content, (content) => {
-        displayTasksList(currentTasks);
-        parser.feed({ text: content });
-    });
-
-    streamChat.on(TLLMEvent.End, () => {
-        parser.flush();
-        displayTasksList(currentTasks);
-        //wait for the parser to flush
-        parser.once('buffer-released', () => {
-            console.log('\n\n');
-            rl.prompt();
-        });
-    });
-
-    streamChat.on(TLLMEvent.Error, (error) => {
-        console.error(chalk.red('❌ Error:', error));
-        rl.prompt();
-    });
-
-    const toolCalls = {};
-
-    streamChat.on(TLLMEvent.ToolCall, (toolCall) => {
-        if (toolCall?.tool?.name.startsWith('_sre_')) {
-            return;
-        }
-
-        //make sure to not print tool info in the middle of a stream output
-        parser.once('buffer-released', (event) => {
-            const args =
-                typeof toolCall?.tool?.arguments === 'object'
-                    ? Object.keys(toolCall?.tool?.arguments).map((key) => `${key}: ${toolCall?.tool?.arguments[key]}`)
-                    : toolCall?.tool?.arguments;
-            console.log(chalk.gray('\n[Calling Tool]'), chalk.gray(toolCall?.tool?.name), chalk.gray(args));
-            toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
-        });
-
-        displayTasksList(currentTasks);
-    });
-
-    streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
-        if (toolResult?.tool?.name.startsWith('_sre_')) {
-            return;
-        }
-
-        //make sure to not print tool info in the middle of a stream output
-        parser.once('buffer-released', (event) => {
-            console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
-            delete toolCalls[toolResult?.tool?.id];
-        });
-        displayTasksList(currentTasks);
-    });
-}
