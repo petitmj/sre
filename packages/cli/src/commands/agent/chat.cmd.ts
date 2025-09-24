@@ -33,15 +33,21 @@ export default async function runChat(args: any, flags: any) {
     const agent = Agent.import(agentPath, { model, mode });
     
     const isPlanner = mode === TAgentMode.PLANNER;
-    let currentTasks: any = {};
     
     if (isPlanner) {
         console.clear();
+        updateStickyTasksPanel();
         console.log(chalk.green('🚀 Smyth Agent is ready in Planner mode!'));
         console.log(chalk.yellow('The agent will create and manage tasks automatically.'));
         console.log(chalk.gray('Tasks will appear in the panel on the right →'));
         console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
         console.log(''); // Empty line
+        
+        // Simple displayTasksList now that currentTasks is global
+        const displayTasksList = (tasksList: any) => {
+            currentTasks = tasksList || {};
+            updateStickyTasksPanel();
+        };
         
         // Set up task event listeners
         agent.on('TasksAdded', (tasksList: any, tasks: any) => {
@@ -84,7 +90,7 @@ export default async function runChat(args: any, flags: any) {
     // Redraw panel on terminal resize (planner mode only)
     if (isPlanner) {
         process.stdout.on('resize', () => {
-            displayTasksList(globalCurrentTasks);
+            displayTasksList(currentTasks);
         });
     }
 
@@ -93,10 +99,10 @@ export default async function runChat(args: any, flags: any) {
 }
 
 // Global variable to store current tasks across function calls
-let globalCurrentTasks: any = {};
+let currentTasks: any = {};
 
 function updateStickyTasksPanel() {
-    if (!globalCurrentTasks || Object.keys(globalCurrentTasks).length === 0) return;
+    if (!currentTasks || Object.keys(currentTasks).length === 0) return;
 
     const terminalWidth = process.stdout.columns || 80;
     const panelWidth = 40;
@@ -120,7 +126,7 @@ function updateStickyTasksPanel() {
     currentRow++;
 
     // Display tasks
-    Object.entries(globalCurrentTasks).forEach(([taskId, task]: [string, any]) => {
+    Object.entries(currentTasks).forEach(([taskId, task]: [string, any]) => {
         if (currentRow >= panelHeight - 3) return;
 
         const summary = task.summary || task.description || 'No description';
@@ -232,14 +238,13 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
     }
 
     try {
-        // Update global tasks reference
-        globalCurrentTasks = currentTasks;
+        // No need for global tasks reference anymore
         
         const assistantName = chat.agentData.name || 'AI';
         
         if (isPlanner) {
             console.log(chalk.gray('Thinking...'));
-            displayTasksList(globalCurrentTasks);
+            updateStickyTasksPanel();
             
             // Send message to the agent and get response
             const streamChat = await chat.prompt(input).stream();
@@ -368,6 +373,12 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
     // Clear the current line and move to a new line for the response
     process.stdout.write('\r');
 
+    // Simple displayTasksList now that currentTasks is global
+    const displayTasksList = (tasksList: any) => {
+        currentTasks = tasksList || {};
+        updateStickyTasksPanel();
+    };
+
     // TokenLoom parser to handle streaming content
     const parser = new TokenLoom({
         emitUnit: EmitUnit.Word,
@@ -398,6 +409,7 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
     const content_color = {
         thinking: chalk.gray,
         planning: chalk.green,
+        code: chalk.cyan,
     };
 
     // Tag events
@@ -449,7 +461,7 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
             process.stdout.write(chalk.white(event.text || ''));
         }
         // Update tasks panel on every text token
-        displayTasksList(globalCurrentTasks);
+        displayTasksList(currentTasks);
     });
 
     streamChat.on(TLLMEvent.Data, (data) => {
@@ -457,13 +469,13 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
     });
 
     streamChat.on(TLLMEvent.Content, (content) => {
-        displayTasksList(globalCurrentTasks);
+        displayTasksList(currentTasks);
         parser.feed({ text: content });
     });
 
     streamChat.on(TLLMEvent.End, () => {
         parser.flush();
-        displayTasksList(globalCurrentTasks);
+        displayTasksList(currentTasks);
         //wait for the parser to flush
         parser.once('buffer-released', () => {
             console.log('\n\n');
@@ -493,7 +505,7 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
             toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
         });
 
-        displayTasksList(globalCurrentTasks);
+        displayTasksList(currentTasks);
     });
 
     streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
@@ -506,11 +518,6 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
             console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
             delete toolCalls[toolResult?.tool?.id];
         });
-        displayTasksList(globalCurrentTasks);
+        displayTasksList(currentTasks);
     });
-}
-
-function displayTasksList(tasksList: any) {
-    globalCurrentTasks = tasksList || {};
-    updateStickyTasksPanel();
 }
