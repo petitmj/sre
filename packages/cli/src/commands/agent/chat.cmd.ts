@@ -45,20 +45,16 @@ export default async function runChat(args: any, flags: any) {
         
         // Set up task event listeners
         agent.on('TasksAdded', (tasksList: any, tasks: any) => {
-            currentTasks = tasks || {};
-            updateStickyTasksPanel();
+            displayTasksList(tasks);
         });
         agent.on('SubTasksAdded', (taskId: string, subTasksList: any, tasks: any) => {
-            currentTasks = tasks || {};
-            updateStickyTasksPanel();
+            displayTasksList(tasks);
         });
         agent.on('TasksUpdated', (taskId: string, status: string, tasks: any) => {
-            currentTasks = tasks || {};
-            updateStickyTasksPanel();
+            displayTasksList(tasks);
         });
         agent.on('TasksCompleted', (tasks: any) => {
-            currentTasks = tasks || {};
-            updateStickyTasksPanel();
+            displayTasksList(tasks);
         });
         agent.on('StatusUpdated', (status: string) => {
             console.log(chalk.gray('>>> ' + status));
@@ -88,7 +84,7 @@ export default async function runChat(args: any, flags: any) {
     // Redraw panel on terminal resize (planner mode only)
     if (isPlanner) {
         process.stdout.on('resize', () => {
-            updateStickyTasksPanel();
+            displayTasksList(globalCurrentTasks);
         });
     }
 
@@ -243,7 +239,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         
         if (isPlanner) {
             console.log(chalk.gray('Thinking...'));
-            updateStickyTasksPanel();
+            displayTasksList(globalCurrentTasks);
             
             // Send message to the agent and get response
             const streamChat = await chat.prompt(input).stream();
@@ -452,8 +448,8 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
         } else {
             process.stdout.write(chalk.white(event.text || ''));
         }
-        // Update tasks panel less frequently to reduce interference
-        updateStickyTasksPanel();
+        // Update tasks panel on every text token
+        displayTasksList(globalCurrentTasks);
     });
 
     streamChat.on(TLLMEvent.Data, (data) => {
@@ -461,16 +457,16 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
     });
 
     streamChat.on(TLLMEvent.Content, (content) => {
-        updateStickyTasksPanel();
+        displayTasksList(globalCurrentTasks);
         parser.feed({ text: content });
     });
 
     streamChat.on(TLLMEvent.End, () => {
         parser.flush();
-        console.log('\n');
-        updateStickyTasksPanel();
+        displayTasksList(globalCurrentTasks);
         //wait for the parser to flush
         parser.once('buffer-released', () => {
+            console.log('\n\n');
             rl.prompt();
         });
     });
@@ -497,7 +493,7 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
             toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
         });
 
-        updateStickyTasksPanel();
+        displayTasksList(globalCurrentTasks);
     });
 
     streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
@@ -510,6 +506,11 @@ async function handlePlannerStreaming(streamChat: any, rl: readline.Interface) {
             console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
             delete toolCalls[toolResult?.tool?.id];
         });
-        updateStickyTasksPanel();
+        displayTasksList(globalCurrentTasks);
     });
+}
+
+function displayTasksList(tasksList: any) {
+    globalCurrentTasks = tasksList || {};
+    updateStickyTasksPanel();
 }
