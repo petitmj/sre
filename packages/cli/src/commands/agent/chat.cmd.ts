@@ -34,22 +34,8 @@ export default async function runChat(args: any, flags: any) {
     
     const isPlanner = mode === TAgentMode.PLANNER;
     
+    // Set up task event listeners immediately after agent creation
     if (isPlanner) {
-        console.clear();
-        updateStickyTasksPanel();
-        console.log(chalk.green('🚀 Smyth Agent is ready in Planner mode!'));
-        console.log(chalk.yellow('The agent will create and manage tasks automatically.'));
-        console.log(chalk.gray('Tasks will appear in the panel on the right →'));
-        console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
-        console.log(''); // Empty line
-        
-        // Simple displayTasksList now that currentTasks is global
-        const displayTasksList = (tasksList: any) => {
-            currentTasks = tasksList || {};
-            updateStickyTasksPanel();
-        };
-        
-        // Set up task event listeners
         agent.on('TasksAdded', (tasksList: any, tasks: any) => {
             displayTasksList(tasks);
         });
@@ -65,18 +51,28 @@ export default async function runChat(args: any, flags: any) {
         agent.on('StatusUpdated', (status: string) => {
             console.log(chalk.gray('>>> ' + status));
         });
+    }
+    
+    if (isPlanner) {
+        console.clear();
+        updateStickyTasksPanel();
+        console.log(chalk.green('🚀 Smyth Agent is ready in Planner mode!'));
+        console.log(chalk.yellow('The agent will create and manage tasks automatically.'));
+        console.log(chalk.gray('Tasks will appear in the panel on the right →'));
+        console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
+        console.log(''); // Empty line
     } else {
     console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
     console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     }
     
-    const chat = agent.chat();
+    const chat = agent.chat({ id: 'cli-chat-session', persist: false });
 
     // Create readline interface for user input
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: chalk.blue('\n\n You: '),
+        prompt: chalk.blue('You: '),
     });
 
     // Set up readline event handlers
@@ -90,7 +86,7 @@ export default async function runChat(args: any, flags: any) {
     // Redraw panel on terminal resize (planner mode only)
     if (isPlanner) {
         process.stdout.on('resize', () => {
-            displayTasksList(currentTasks);
+            updateStickyTasksPanel();
         });
     }
 
@@ -100,6 +96,12 @@ export default async function runChat(args: any, flags: any) {
 
 // Global variable to store current tasks across function calls
 let currentTasks: any = {};
+
+// Global displayTasksList function - matches reference example exactly
+function displayTasksList(tasksList: any) {
+    currentTasks = tasksList || {};
+    updateStickyTasksPanel();
+}
 
 function updateStickyTasksPanel() {
     if (!currentTasks || Object.keys(currentTasks).length === 0) return;
@@ -180,12 +182,115 @@ function updateStickyTasksPanel() {
             process.stdout.write(chalk.cyan('│'));
             currentRow++;
         }
+
+        // Display subtasks if they exist
+        if (task.subtasks && Object.keys(task.subtasks).length > 0) {
+            Object.entries(task.subtasks).forEach(([subTaskId, subTask]: [string, any]) => {
+                if (currentRow >= panelHeight - 3) return; // Leave space for footer
+
+                const subSummary = subTask.summary || subTask.description || 'No description';
+                const subStatus = subTask.status || 'planned';
+
+                let subStatusColor: (text: string) => string = chalk.white;
+                let subIcon = '';
+
+                switch (subStatus.toLowerCase()) {
+                    case 'completed':
+                    case 'done':
+                        subStatusColor = chalk.green;
+                        subIcon = '✓';
+                        break;
+                    case 'ongoing':
+                    case 'in progress':
+                        subStatusColor = chalk.yellow;
+                        subIcon = '○';
+                        break;
+                    case 'failed':
+                    case 'error':
+                        subStatusColor = chalk.red;
+                        subIcon = '❌';
+                        break;
+                    case 'planned':
+                    default:
+                        subStatusColor = chalk.blue;
+                        subIcon = '·';
+                        break;
+                }
+
+                // Subtask status line - indented
+                process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+                process.stdout.write(chalk.cyan('│') + '   ');
+                process.stdout.write(`${chalk.gray('└')} ${subIcon} ${subStatusColor(subStatus.toLowerCase())}`);
+                process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+                process.stdout.write(chalk.cyan('│'));
+                currentRow++;
+
+                // Subtask summary lines with word wrapping - indented
+                const maxSubSummaryLength = panelWidth - 8;
+                const wrappedSubSummary = wrapText(subSummary, maxSubSummaryLength);
+
+                for (const line of wrappedSubSummary) {
+                    if (currentRow >= panelHeight - 3) break; // Leave space for footer
+
+                    process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+                    process.stdout.write(chalk.cyan('│') + '     ');
+                    process.stdout.write(chalk.gray(line));
+                    process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+                    process.stdout.write(chalk.cyan('│'));
+                    currentRow++;
+                }
+            });
+        }
+
+        // Empty line between tasks - use fixed positioning
+        if (currentRow < panelHeight - 3) {
+            process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+            process.stdout.write(chalk.cyan('│'));
+            process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+            process.stdout.write(chalk.cyan('│'));
+            currentRow++;
+        }
     });
 
-    // Fill remaining rows
+    // Fill remaining rows if needed - use fixed positioning
     while (currentRow < panelHeight - 2) {
         process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
         process.stdout.write(chalk.cyan('│'));
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
+        process.stdout.write(chalk.cyan('│'));
+        currentRow++;
+    }
+
+    // Summary footer
+    if (currentTasks && Object.keys(currentTasks).length > 0) {
+        let completed = 0,
+            ongoing = 0,
+            planned = 0;
+        Object.values(currentTasks).forEach((task: any) => {
+            const status = (task.status || 'planned').toLowerCase();
+            if (status === 'completed' || status === 'done') completed++;
+            else if (status === 'ongoing' || status === 'in progress') ongoing++;
+            else planned++;
+
+            // Count subtasks if they exist
+            if (task.subtasks) {
+                Object.values(task.subtasks).forEach((subTask: any) => {
+                    const subStatus = (subTask.status || 'planned').toLowerCase();
+                    if (subStatus === 'completed' || subStatus === 'done') completed++;
+                    else if (subStatus === 'ongoing' || subStatus === 'in progress') ongoing++;
+                    else planned++;
+                });
+            }
+        });
+
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+        process.stdout.write(chalk.cyan('├') + chalk.cyan('─'.repeat(panelWidth - 2)) + chalk.cyan('┤'));
+        currentRow++;
+
+        const countsText = `${chalk.green('✅' + completed)} ${chalk.yellow('⏳' + ongoing)} ${chalk.blue('📝' + planned)}`;
+        process.stdout.write(`\u001b[${currentRow};${panelStartCol}H`);
+        process.stdout.write(chalk.cyan('│') + ' ');
+        process.stdout.write(countsText);
         process.stdout.write(`\u001b[${currentRow};${panelStartCol + panelWidth - 1}H`);
         process.stdout.write(chalk.cyan('│'));
         currentRow++;
@@ -213,6 +318,7 @@ function wrapText(text: string, maxWidth: number): string[] {
                 lines.push(currentLine);
                 currentLine = word;
             } else {
+                // Single word longer than maxWidth, truncate it
                 lines.push(word.substring(0, maxWidth - 3) + '...');
                 currentLine = '';
             }
@@ -239,14 +345,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
 
     try {
         console.log(chalk.gray('Thinking...'));
-        if (isPlanner) {
-            // Update task panel for planner mode
-            const displayTasksList = (tasksList: any) => {
-                currentTasks = tasksList || {};
-                updateStickyTasksPanel();
-            };
-            displayTasksList(currentTasks);
-        }
+        displayTasksList(currentTasks);
 
         // Send message to the agent and get response
         const streamChat = await chat.prompt(input).stream();
@@ -284,7 +383,6 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         const content_color = {
             thinking: chalk.gray,
             planning: chalk.green,
-            code: chalk.cyan,
         };
 
         // Tag events
@@ -335,14 +433,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
             } else {
                 process.stdout.write(chalk.white(event.text || ''));
             }
-            // Only update tasks panel in planner mode
-            if (isPlanner) {
-                const displayTasksList = (tasksList: any) => {
-                    currentTasks = tasksList || {};
-                    updateStickyTasksPanel();
-                };
-                displayTasksList(currentTasks);
-            }
+            displayTasksList(currentTasks);
         });
 
         streamChat.on(TLLMEvent.Data, (data) => {
@@ -350,25 +441,13 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         });
 
         streamChat.on(TLLMEvent.Content, (content) => {
-            if (isPlanner) {
-                const displayTasksList = (tasksList: any) => {
-                    currentTasks = tasksList || {};
-                    updateStickyTasksPanel();
-                };
-                displayTasksList(currentTasks);
-            }
+            displayTasksList(currentTasks);
             parser.feed({ text: content });
         });
 
         streamChat.on(TLLMEvent.End, () => {
             parser.flush();
-            if (isPlanner) {
-                const displayTasksList = (tasksList: any) => {
-                    currentTasks = tasksList || {};
-                    updateStickyTasksPanel();
-                };
-                displayTasksList(currentTasks);
-            }
+            displayTasksList(currentTasks);
             //wait for the parser to flush
             parser.once('buffer-released', () => {
                 console.log('\n\n');
@@ -398,25 +477,13 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
                 toolCalls[toolCall?.tool?.id] = { startTime: Date.now() };
             });
 
-            if (isPlanner) {
-                const displayTasksList = (tasksList: any) => {
-                    currentTasks = tasksList || {};
-                    updateStickyTasksPanel();
-                };
-                displayTasksList(currentTasks);
-            }
+            displayTasksList(currentTasks);
         });
 
         streamChat.on(TLLMEvent.ToolResult, (toolResult) => {
             if (toolResult?.tool?.name.startsWith('_sre_')) {
-                if (isPlanner) {
-                    console.log('\n');
-                    const displayTasksList = (tasksList: any) => {
-                        currentTasks = tasksList || {};
-                        updateStickyTasksPanel();
-                    };
-                    displayTasksList(currentTasks);
-                }
+                console.log('\n');
+                displayTasksList(currentTasks);
                 return;
             }
 
@@ -426,13 +493,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
                 delete toolCalls[toolResult?.tool?.id];
             });
             
-            if (isPlanner) {
-                const displayTasksList = (tasksList: any) => {
-                    currentTasks = tasksList || {};
-                    updateStickyTasksPanel();
-                };
-                displayTasksList(currentTasks);
-            }
+            displayTasksList(currentTasks);
         });
     } catch (error) {
         console.error(chalk.red('❌ Error:', error));
