@@ -31,9 +31,9 @@ export default async function runChat(args: any, flags: any) {
     const mode = flags.mode === 'planner' ? TAgentMode.PLANNER : TAgentMode.DEFAULT;
 
     const agent = Agent.import(agentPath, { model, mode });
-    
+
     const isPlanner = mode === TAgentMode.PLANNER;
-    
+
     // Set up task event listeners immediately after agent creation
     if (isPlanner) {
         agent.on('TasksAdded', (tasksList: any, tasks: any) => {
@@ -52,7 +52,7 @@ export default async function runChat(args: any, flags: any) {
             console.log(chalk.gray('>>> ' + status));
         });
     }
-    
+
     if (isPlanner) {
         console.clear();
         updateStickyTasksPanel();
@@ -62,10 +62,10 @@ export default async function runChat(args: any, flags: any) {
         console.log(chalk.gray('Type "exit" or "quit" to end the conversation.'));
         console.log(''); // Empty line
     } else {
-    console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
-    console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        console.log(chalk.white('\nYou are now chatting with agent : ') + chalk.bold.green(agent.data?.name));
+        console.log(chalk.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     }
-    
+
     const chat = agent.chat({ id: 'cli-chat-session', persist: false });
 
     // Create readline interface for user input
@@ -76,7 +76,7 @@ export default async function runChat(args: any, flags: any) {
     });
 
     // Set up readline event handlers
-        rl.on('line', (input) => handleUserInput(input, rl, chat, isPlanner));
+    rl.on('line', (input) => handleUserInput(input, rl, chat, isPlanner));
 
     rl.on('close', () => {
         console.log(chalk.gray('Chat session ended.'));
@@ -355,7 +355,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
 
         // TokenLoom parser to handle streaming content - ALWAYS use this approach
         const parser = new TokenLoom({
-            emitUnit: EmitUnit.Word,
+            emitUnit: EmitUnit.Grapheme,
             emitDelay: 5,
             tags: ['thinking', 'planning', 'code'],
         });
@@ -385,8 +385,68 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
             planning: chalk.green,
         };
 
+        // Gradient for plain text stream (untagged content only)
+        const gradient: Array<(text: string) => string> = [
+            chalk.rgb(200, 255, 200),
+            chalk.rgb(170, 255, 170),
+            chalk.rgb(140, 240, 140),
+            chalk.rgb(110, 225, 110),
+            chalk.rgb(85, 221, 85),
+            chalk.rgb(60, 200, 60),
+            chalk.rgb(0, 187, 0),
+            chalk.rgb(0, 153, 0),
+            chalk.bold.rgb(0, 130, 0),
+            chalk.bold.rgb(0, 119, 0),
+        ];
+
+        // Moving gradient window over the most recent characters only
+        let coloredTail = '';
+        const flushColoredTail = () => {
+            if (!coloredTail) return;
+            process.stdout.write(`\u001b[${coloredTail.length}D`);
+            process.stdout.write(chalk.white(coloredTail));
+            coloredTail = '';
+        };
+        const colorWithWindow = (tail: string): string => {
+            const start = Math.max(0, gradient.length - tail.length);
+            let out = '';
+            for (let i = 0; i < tail.length; i++) {
+                const colorFn = gradient[start + i];
+                out += colorFn(tail[i]);
+            }
+            return out;
+        };
+        const writeWithEphemeralGradient = (incoming: string) => {
+            if (!incoming) return;
+            // Process per grapheme to animate smoothly even if larger chunks arrive
+            for (let i = 0; i < incoming.length; i++) {
+                const ch = incoming[i];
+                if (ch === '\n') {
+                    // Before newline, finalize current colored tail to white
+                    flushColoredTail();
+                    process.stdout.write('\n');
+                    continue;
+                }
+                // Recompute window and repaint region
+                const combined = coloredTail + ch;
+                const overflow = Math.max(0, combined.length - gradient.length);
+                const whitePart = combined.slice(0, overflow);
+                const newTail = combined.slice(overflow);
+
+                // Move back to the start of current colored tail
+                process.stdout.write(`\u001b[${coloredTail.length}D`);
+                // Write the dropped-off portion as white
+                if (whitePart) process.stdout.write(chalk.white(whitePart));
+                // Write the new gradient tail
+                process.stdout.write(colorWithWindow(newTail));
+                coloredTail = newTail;
+            }
+        };
+
         // Tag events
         parser.on('tag-open', (event: any) => {
+            // Ensure no lingering colored tail before entering a tag
+            flushColoredTail();
             printAssistantPrefixOnce();
             const name = (event.name || '').toLowerCase();
             process.stdout.write(chalk.gray(`<${name}>`));
@@ -394,6 +454,8 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         });
 
         parser.on('tag-close', (event: any) => {
+            // Ensure no lingering colored tail before closing a tag
+            flushColoredTail();
             printAssistantPrefixOnce();
             const name = (event.name || '').toLowerCase();
             process.stdout.write(chalk.gray(`</${name}>`));
@@ -404,6 +466,8 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
 
         // Code fence events
         parser.on('code-fence-start', (event: any) => {
+            // Ensure no lingering colored tail before code block
+            flushColoredTail();
             printAssistantPrefixOnce();
             const info = event.info ? String(event.info) : event.lang ? String(event.lang) : '';
             process.stdout.write(chalk.gray(`\n\`\`\`${info}\n`));
@@ -416,6 +480,8 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         });
 
         parser.on('code-fence-end', () => {
+            // Ensure no lingering colored tail after code block
+            flushColoredTail();
             printAssistantPrefixOnce();
             process.stdout.write(chalk.gray(`\n\`\`\`\n`));
             const duration = fenceStartTime ? Date.now() - fenceStartTime : 0;
@@ -431,7 +497,8 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
                 const color = (content_color as any)[inTagName] || chalk.gray;
                 process.stdout.write(color(event.text || ''));
             } else {
-                process.stdout.write(chalk.white(event.text || ''));
+                // Apply moving gradient window to plain text only
+                writeWithEphemeralGradient(event.text || '');
             }
             displayTasksList(currentTasks);
         });
@@ -448,10 +515,11 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
         streamChat.on(TLLMEvent.End, () => {
             parser.flush();
             displayTasksList(currentTasks);
-            //wait for the parser to flush
+            //wait for the parser to flush, then finalize tail to white
             parser.once('buffer-released', () => {
+                flushColoredTail();
                 console.log('\n\n');
-            rl.prompt();
+                rl.prompt();
             });
         });
 
@@ -492,7 +560,7 @@ async function handleUserInput(input: string, rl: readline.Interface, chat: Chat
                 console.log(chalk.gray(toolResult?.tool?.name), chalk.gray(`Took: ${Date.now() - toolCalls[toolResult?.tool?.id].startTime}ms`));
                 delete toolCalls[toolResult?.tool?.id];
             });
-            
+
             displayTasksList(currentTasks);
         });
     } catch (error) {
@@ -566,4 +634,3 @@ export class LineWrapperPlugin extends PluginBase {
         this.needsWrap = false;
     }
 }
-
