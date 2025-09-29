@@ -191,7 +191,7 @@ export class RuntimeContext extends EventEmitter {
 
     public enqueueSync() {
         if (!this.ctxFile) return;
-        console.log('ENQUEUE SYNC');
+
         this._syncQueue = this._syncQueue
             .then(() => this.sync())
             .catch((err) => {
