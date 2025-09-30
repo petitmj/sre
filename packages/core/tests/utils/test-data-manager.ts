@@ -44,7 +44,7 @@ export class TestDataManager {
      */
     public readJsonData(filename: string): any {
         const filePath = this.getDataPath(filename);
-        console.log('filePath', filePath);
+
         if (!fs.existsSync(filePath)) {
             throw new Error(`Test data file not found: ${filePath}`);
         }
